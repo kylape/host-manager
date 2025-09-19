@@ -3,11 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
-	"os/exec"
+	"syscall"
 
 	"github.com/kylape/host-manager/internal/host"
+	"github.com/kylape/host-manager/internal/logger"
 	"github.com/kylape/host-manager/internal/server"
 	"github.com/kylape/host-manager/internal/state"
 )
@@ -18,6 +18,7 @@ func main() {
 		help       = flag.Bool("help", false, "Show help message")
 		port       = flag.String("port", "8080", "HTTP server port")
 		foreground = flag.Bool("foreground", false, "Run in foreground instead of background")
+		auditLog   = flag.Bool("audit", false, "Enable HTTP request audit logging")
 	)
 	flag.Parse()
 
@@ -38,13 +39,20 @@ func main() {
 		return
 	}
 
+	// Initialize logging
+	logger := logger.New(*foreground)
+
 	// Handle daemon mode (background by default)
 	if !*foreground {
-		daemonize()
+		logger.Info("Starting daemonization process")
+		if err := daemonize(); err != nil {
+			logger.Error("Failed to daemonize", "error", err)
+			os.Exit(1)
+		}
 		return
 	}
 
-	log.Println("Starting host manager...")
+	logger.Info("Starting host manager", "port", *port, "audit", *auditLog)
 
 	// Initialize state manager
 	stateManager := state.NewManager()
@@ -52,28 +60,31 @@ func main() {
 	// Check if host is already initialized
 	hostState, err := stateManager.Load()
 	if err != nil {
-		log.Printf("Failed to load state (assuming fresh host): %v", err)
+		logger.Warn("Failed to load state, assuming fresh host", "error", err)
 		hostState = &state.HostState{Initialized: false}
 	}
 
 	if !hostState.Initialized {
-		log.Println("Fresh host detected, running initialization...")
+		logger.Info("Fresh host detected, running initialization")
 
 		// Initialize host with auto-detection
 		hostManager := host.NewManager(stateManager)
 		if err := hostManager.Initialize(); err != nil {
-			log.Fatalf("Host setup failed: %v", err)
+			logger.Error("Host setup failed", "error", err)
+			os.Exit(1)
 		}
 
-		log.Println("Host initialization complete")
+		logger.Info("Host initialization complete")
 	} else {
-		log.Printf("Host already initialized (at %v), skipping setup", hostState.InitializedAt)
+		logger.Info("Host already initialized, skipping setup", "initialized_at", hostState.InitializedAt)
 	}
 
 	// Start HTTP server for runtime operations
-	srv := server.New(stateManager)
+	srv := server.New(stateManager, logger, *auditLog)
+	logger.Info("HTTP server ready", "address", ":"+*port)
 	if err := srv.Start(":" + *port); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		logger.Error("Server failed", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -86,6 +97,7 @@ Options:
   --help          Show this help message
   --port PORT     HTTP server port (default: 8080)
   --foreground    Run in foreground instead of background
+  --audit         Enable HTTP request audit logging
 
 Features:
   - Auto-initialization: Complete host setup on first run
@@ -114,30 +126,28 @@ For more information, see README.md
 `, os.Args[0], os.Args[0], os.Args[0])
 }
 
-// daemonize runs the process in the background
-func daemonize() {
-	// In container environments, just redirect output and continue
-	// Re-run the same command with --foreground flag
-	args := append(os.Args[1:], "--foreground")
-	cmd := exec.Command(os.Args[0], args...)
-
-	// Redirect stdout/stderr to discard output in background mode
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	if err := cmd.Start(); err != nil {
-		log.Fatalf("Failed to start daemon: %v", err)
+// daemonize implements proper POSIX daemonization
+func daemonize() error {
+	// First fork
+	pid, err := syscall.ForkExec(os.Args[0], append(os.Args, "--foreground"), &syscall.ProcAttr{
+		Dir:   "/",
+		Env:   os.Environ(),
+		Files: []uintptr{0, 1, 2}, // stdin, stdout, stderr
+	})
+	if err != nil {
+		return fmt.Errorf("fork failed: %v", err)
 	}
 
-	fmt.Printf("Host manager daemon started with PID %d\n", cmd.Process.Pid)
+	fmt.Printf("Host manager daemon started with PID %d\n", pid)
+	return nil
 }
 
 // isRunningInContainer detects if the process is running inside a container
 func isRunningInContainer() bool {
 	// Check for container-specific files/environment variables
 	containerIndicators := []string{
-		"/.dockerenv",           // Docker
-		"/run/.containerenv",    // Podman
+		"/.dockerenv",        // Docker
+		"/run/.containerenv", // Podman
 	}
 
 	for _, indicator := range containerIndicators {

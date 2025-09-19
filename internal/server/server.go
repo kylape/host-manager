@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/kylape/host-manager/internal/kind"
+	"github.com/kylape/host-manager/internal/logger"
 	"github.com/kylape/host-manager/internal/state"
 )
 
@@ -16,14 +18,18 @@ type Server struct {
 	stateManager *state.Manager
 	kindClient   *kind.Client
 	router       *mux.Router
+	logger       *logger.Logger
+	auditEnabled bool
 }
 
 // New creates a new HTTP server
-func New(stateManager *state.Manager) *Server {
+func New(stateManager *state.Manager, logger *logger.Logger, auditEnabled bool) *Server {
 	s := &Server{
 		stateManager: stateManager,
 		kindClient:   kind.NewClient(),
 		router:       mux.NewRouter(),
+		logger:       logger,
+		auditEnabled: auditEnabled,
 	}
 
 	s.setupRoutes()
@@ -32,7 +38,7 @@ func New(stateManager *state.Manager) *Server {
 
 // Start starts the HTTP server
 func (s *Server) Start(addr string) error {
-	log.Printf("Starting HTTP server on %s", addr)
+	s.logger.Info("Starting HTTP server", "address", addr)
 	return http.ListenAndServe(addr, s.router)
 }
 
@@ -57,7 +63,10 @@ func (s *Server) setupRoutes() {
 
 	// Enable CORS for all routes
 	s.router.Use(corsMiddleware)
-	s.router.Use(loggingMiddleware)
+	s.router.Use(s.loggingMiddleware)
+	if s.auditEnabled {
+		s.router.Use(s.auditMiddleware)
+	}
 }
 
 // handleHealth returns service health status
@@ -341,9 +350,62 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 // loggingMiddleware logs HTTP requests
-func loggingMiddleware(next http.Handler) http.Handler {
+func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s %s", r.Method, r.URL.Path, r.RemoteAddr)
+		s.logger.Debug("HTTP request", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// auditMiddleware provides detailed HTTP request audit logging
+func (s *Server) auditMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Wrap the ResponseWriter to capture status code
+		wrapped := &responseWriter{ResponseWriter: w, statusCode: 200}
+
+		// Process the request
+		next.ServeHTTP(wrapped, r)
+
+		// Log audit information
+		duration := time.Since(start)
+		s.logger.Audit("HTTP request processed", map[string]string{
+			"HTTP_METHOD":     r.Method,
+			"HTTP_PATH":       r.URL.Path,
+			"HTTP_QUERY":      r.URL.RawQuery,
+			"CLIENT_IP":       getClientIP(r),
+			"USER_AGENT":      r.UserAgent(),
+			"REFERER":         r.Referer(),
+			"STATUS_CODE":     fmt.Sprintf("%d", wrapped.statusCode),
+			"RESPONSE_TIME":   duration.String(),
+			"CONTENT_LENGTH":  r.Header.Get("Content-Length"),
+			"REQUEST_ID":      fmt.Sprintf("%d", start.UnixNano()),
+		})
+	})
+}
+
+// responseWriter wraps http.ResponseWriter to capture status code
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+// getClientIP extracts the real client IP from headers
+func getClientIP(r *http.Request) string {
+	// Check X-Forwarded-For header first
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return xff
+	}
+	// Check X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	// Fall back to RemoteAddr
+	return r.RemoteAddr
 }
