@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"syscall"
 
 	"github.com/kylape/host-manager/internal/host"
@@ -128,10 +129,13 @@ For more information, see README.md
 
 // daemonize implements proper POSIX daemonization
 func daemonize() error {
+	// Filter environment variables to include only valid ones
+	validEnv := filterValidEnvVars(os.Environ())
+
 	// First fork
 	pid, err := syscall.ForkExec(os.Args[0], append(os.Args, "--foreground"), &syscall.ProcAttr{
 		Dir:   "/",
-		Env:   os.Environ(),
+		Env:   validEnv,
 		Files: []uintptr{0, 1, 2}, // stdin, stdout, stderr
 	})
 	if err != nil {
@@ -140,6 +144,45 @@ func daemonize() error {
 
 	fmt.Printf("Host manager daemon started with PID %d\n", pid)
 	return nil
+}
+
+// filterValidEnvVars filters environment variables to include only those with valid names
+func filterValidEnvVars(environ []string) []string {
+	// Valid environment variable names: [A-Za-z_][A-Za-z0-9_]*
+	validNameRegex := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
+
+	var validEnv []string
+	var invalidCount int
+
+	for _, env := range environ {
+		if validNameRegex.MatchString(env) {
+			validEnv = append(validEnv, env)
+		} else {
+			invalidCount++
+		}
+	}
+
+	// Log warning if invalid environment variables were filtered
+	if invalidCount > 0 {
+		fmt.Fprintf(os.Stderr, "Warning: Filtered %d environment variables with invalid names during daemonization\n", invalidCount)
+	}
+
+	// Check for critical environment variables and warn if missing
+	criticalVars := []string{"PATH"}
+	for _, critical := range criticalVars {
+		found := false
+		for _, env := range validEnv {
+			if regexp.MustCompile(`^` + critical + `=`).MatchString(env) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.Fprintf(os.Stderr, "Warning: Critical environment variable %s not found - daemon may not function correctly\n", critical)
+		}
+	}
+
+	return validEnv
 }
 
 // isRunningInContainer detects if the process is running inside a container
