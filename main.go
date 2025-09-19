@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 
 	"github.com/kylape/host-manager/internal/host"
 	"github.com/kylape/host-manager/internal/server"
@@ -14,13 +15,32 @@ import (
 func main() {
 	// Parse command line flags
 	var (
-		help = flag.Bool("help", false, "Show help message")
-		port = flag.String("port", "8080", "HTTP server port")
+		help       = flag.Bool("help", false, "Show help message")
+		port       = flag.String("port", "8080", "HTTP server port")
+		foreground = flag.Bool("foreground", false, "Run in foreground instead of background")
 	)
 	flag.Parse()
 
+	// Exit immediately if running in a container
+	if isRunningInContainer() {
+		fmt.Println("Error: This service cannot run in containers.")
+		os.Exit(1)
+	}
+
+	// Exit immediately if not running as root
+	if os.Geteuid() != 0 {
+		fmt.Println("Error: This service must run as root.")
+		os.Exit(1)
+	}
+
 	if *help {
 		showHelp()
+		return
+	}
+
+	// Handle daemon mode (background by default)
+	if !*foreground {
+		daemonize()
 		return
 	}
 
@@ -52,7 +72,6 @@ func main() {
 
 	// Start HTTP server for runtime operations
 	srv := server.New(stateManager)
-	log.Printf("Starting HTTP server on :%s", *port)
 	if err := srv.Start(":" + *port); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
@@ -66,6 +85,7 @@ Usage: %s [options]
 Options:
   --help          Show this help message
   --port PORT     HTTP server port (default: 8080)
+  --foreground    Run in foreground instead of background
 
 Features:
   - Auto-initialization: Complete host setup on first run
@@ -92,4 +112,44 @@ Example Usage:
 
 For more information, see README.md
 `, os.Args[0], os.Args[0], os.Args[0])
+}
+
+// daemonize runs the process in the background
+func daemonize() {
+	// In container environments, just redirect output and continue
+	// Re-run the same command with --foreground flag
+	args := append(os.Args[1:], "--foreground")
+	cmd := exec.Command(os.Args[0], args...)
+
+	// Redirect stdout/stderr to discard output in background mode
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		log.Fatalf("Failed to start daemon: %v", err)
+	}
+
+	fmt.Printf("Host manager daemon started with PID %d\n", cmd.Process.Pid)
+}
+
+// isRunningInContainer detects if the process is running inside a container
+func isRunningInContainer() bool {
+	// Check for container-specific files/environment variables
+	containerIndicators := []string{
+		"/.dockerenv",           // Docker
+		"/run/.containerenv",    // Podman
+	}
+
+	for _, indicator := range containerIndicators {
+		if _, err := os.Stat(indicator); err == nil {
+			return true
+		}
+	}
+
+	// Check environment variables
+	if os.Getenv("container") != "" || os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		return true
+	}
+
+	return false
 }
