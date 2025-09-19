@@ -43,5 +43,9 @@ curl -X DELETE http://localhost:8080/clusters/my-dev-cluster
 ## Build
 
 ```bash
-go build -o host-manager ./cmd/host-manager
+# Build the main server
+go build -o host-manager .
+
+# Build the client CLI
+go build -o hm-client ./cmd/hm-client
 ```
