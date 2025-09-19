@@ -13,6 +13,8 @@ import (
 func installPackages() error {
 	// Update system packages
 	cmd := exec.Command("dnf", "update", "-y")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to update packages: %w", err)
 	}
@@ -25,6 +27,8 @@ func installPackages() error {
 
 	args := append([]string{"install", "-y"}, packages...)
 	cmd = exec.Command("dnf", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to install packages: %w", err)
 	}
@@ -46,15 +50,21 @@ func installPackages() error {
 func configureSystemSettings() error {
 	// Enable lingering for current user
 	cmd := exec.Command("loginctl", "enable-linger", os.Getenv("USER"))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Run() // Ignore errors
 
 	// Set inotify limits
 	cmd = exec.Command("sysctl", "fs.inotify.max_user_watches=524288")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to set inotify max_user_watches: %w", err)
 	}
 
 	cmd = exec.Command("sysctl", "fs.inotify.max_user_instances=512")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to set inotify max_user_instances: %w", err)
 	}

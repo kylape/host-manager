@@ -57,6 +57,8 @@ func scanForNVMeDevices() (*state.StorageConfig, error) {
 func isInstanceStore(device string) bool {
 	// Check if device has a filesystem (EBS volumes usually do)
 	cmd := exec.Command("blkid", device)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if cmd.Run() == nil {
 		return false // Has filesystem, likely EBS
 	}
@@ -83,12 +85,16 @@ func isInstanceStore(device string) bool {
 func setupNVMeStorage(device string) error {
 	// Create BTRFS filesystem
 	cmd := exec.Command("mkfs.btrfs", "-f", device)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to create BTRFS filesystem: %w", err)
 	}
 
 	// Mount to /root
 	cmd = exec.Command("mount", device, "/root")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to mount %s to /root: %w", device, err)
 	}
@@ -129,12 +135,18 @@ runroot = "/run/containers/storage"
 
 	// Set SELinux contexts if available
 	cmd := exec.Command("semanage", "fcontext", "-a", "-t", "container_var_lib_t", "/root/containers/storage(/.*)?")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Run() // Ignore errors - SELinux might not be enabled
 
 	cmd = exec.Command("semanage", "fcontext", "-a", "-t", "container_file_t", "/root/containers/storage/overlay-containers(/.*)?")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Run() // Ignore errors
 
 	cmd = exec.Command("restorecon", "-R", "/root/containers/storage")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Run() // Ignore errors
 
 	return nil

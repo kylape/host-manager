@@ -2,6 +2,7 @@ package kind
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -25,6 +26,8 @@ func (c *Client) CreateCluster(name string, withRegistry bool) error {
 
 	cmd := exec.Command("kind", "create", "cluster", "--name", name, "--config", "-")
 	cmd.Stdin = strings.NewReader(config)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -44,6 +47,8 @@ func (c *Client) CreateCluster(name string, withRegistry bool) error {
 // DeleteCluster deletes a kind cluster
 func (c *Client) DeleteCluster(name string) error {
 	cmd := exec.Command("kind", "delete", "cluster", "--name", name)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to delete cluster %s: %w\nOutput: %s", name, err, string(output))
@@ -81,6 +86,8 @@ func (c *Client) GetKubeconfig(name string) (string, error) {
 func (c *Client) CreateRegistry() error {
 	// Check if registry already exists
 	cmd := exec.Command("podman", "inspect", "kind-registry")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if cmd.Run() == nil {
 		// Registry already exists, check if it's running
 		cmd = exec.Command("podman", "inspect", "-f", "{{.State.Running}}", "kind-registry")
@@ -91,6 +98,8 @@ func (c *Client) CreateRegistry() error {
 
 		// Start existing registry
 		cmd = exec.Command("podman", "start", "kind-registry")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	}
 
@@ -101,6 +110,8 @@ func (c *Client) CreateRegistry() error {
 		"--network", "bridge",
 		"--name", "kind-registry",
 		"registry:2")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -113,6 +124,8 @@ func (c *Client) CreateRegistry() error {
 // LoadImage loads a Docker image into a cluster
 func (c *Client) LoadImage(clusterName, imageName string) error {
 	cmd := exec.Command("kind", "load", "docker-image", imageName, "--name", clusterName)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to load image %s into cluster %s: %w\nOutput: %s", imageName, clusterName, err, string(output))
@@ -179,6 +192,8 @@ func (c *Client) connectToRegistry(clusterName string) error {
 
 		// Create registry config directory
 		cmd = exec.Command("podman", "exec", node, "mkdir", "-p", "/etc/containerd/certs.d/localhost:5001")
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to create registry config dir in node %s: %w", node, err)
 		}
@@ -187,6 +202,8 @@ func (c *Client) connectToRegistry(clusterName string) error {
 		config := "[host.\"http://kind-registry:5000\"]"
 		cmd = exec.Command("podman", "exec", "-i", node, "cp", "/dev/stdin", "/etc/containerd/certs.d/localhost:5001/hosts.toml")
 		cmd.Stdin = strings.NewReader(config)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to write registry config in node %s: %w", node, err)
 		}
@@ -194,6 +211,8 @@ func (c *Client) connectToRegistry(clusterName string) error {
 
 	// Connect registry to cluster network
 	cmd = exec.Command("podman", "network", "connect", "kind", "kind-registry")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	cmd.Run() // Ignore errors - might already be connected
 
 	return nil
