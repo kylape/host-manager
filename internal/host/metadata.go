@@ -14,7 +14,20 @@ import (
 func getInstanceType() (string, error) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
-	resp, err := client.Get("http://169.254.169.254/latest/meta-data/instance-type")
+	// First, get IMDSv2 token
+	token, err := getIMDSv2Token(client)
+	if err != nil {
+		return "", fmt.Errorf("failed to get IMDSv2 token: %w", err)
+	}
+
+	// Use token to fetch instance type
+	req, err := http.NewRequest("GET", "http://169.254.169.254/latest/meta-data/instance-type", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("X-aws-ec2-metadata-token", token)
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch instance type: %w", err)
 	}
@@ -30,6 +43,32 @@ func getInstanceType() (string, error) {
 	}
 
 	return strings.TrimSpace(string(body)), nil
+}
+
+// getIMDSv2Token obtains a session token for IMDSv2
+func getIMDSv2Token(client *http.Client) (string, error) {
+	req, err := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create token request: %w", err)
+	}
+	req.Header.Set("X-aws-ec2-metadata-token-ttl-seconds", "21600") // 6 hours
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch token: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("token request failed with status %d", resp.StatusCode)
+	}
+
+	token, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read token: %w", err)
+	}
+
+	return strings.TrimSpace(string(token)), nil
 }
 
 // detectStorageFromInstanceType determines storage configuration based on instance type
