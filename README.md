@@ -49,3 +49,37 @@ go build -o host-manager .
 # Build the client CLI
 go build -o hm-client ./cmd/hm-client
 ```
+
+## State File
+
+After initialization, host-manager creates `/etc/host-manager-state.json` to track system state:
+
+```json
+{
+  "initialized": true,
+  "initialized_at": "2024-01-15T10:30:00Z",
+  "instance_type": "m5.xlarge",
+  "storage_type": "nvme",
+  "storage_device": "/dev/nvme1n1",
+  "packages_installed": true,
+  "base_cluster_ready": true,
+  "registry_running": true,
+  "clusters": {
+    "kind": {
+      "status": "running",
+      "created": "2024-01-15T10:30:00Z",
+      "type": "infrastructure",
+      "kubevirt": false
+    }
+  }
+}
+```
+
+This state file prevents re-initialization on subsequent runs and tracks:
+
+* Host initialization status and timestamp
+* EC2 instance type and storage configuration
+* Package installation status
+* Base infrastructure cluster status
+* Local registry status
+* All managed Kind clusters with their configuration
