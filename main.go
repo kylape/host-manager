@@ -16,23 +16,27 @@ import (
 func main() {
 	// Parse command line flags
 	var (
-		help       = flag.Bool("help", false, "Show help message")
-		port       = flag.String("port", "8080", "HTTP server port")
-		foreground = flag.Bool("foreground", false, "Run in foreground instead of background")
-		auditLog   = flag.Bool("audit", false, "Enable HTTP request audit logging")
+		help          = flag.Bool("help", false, "Show help message")
+		port          = flag.String("port", "8080", "HTTP server port")
+		foreground    = flag.Bool("foreground", false, "Run in foreground instead of background")
+		auditLog      = flag.Bool("audit", false, "Enable HTTP request audit logging")
+		skipBootstrap = flag.Bool("skip-bootstrap", false, "Skip host initialization and run server only")
 	)
 	flag.Parse()
 
-	// Exit immediately if running in a container
-	if isRunningInContainer() {
-		fmt.Println("Error: This service cannot run in containers.")
-		os.Exit(1)
-	}
+	// Only check container/root requirements if not skipping bootstrap
+	if !*skipBootstrap {
+		// Exit immediately if running in a container
+		if isRunningInContainer() {
+			fmt.Println("Error: This service cannot run in containers.")
+			os.Exit(1)
+		}
 
-	// Exit immediately if not running as root
-	if os.Geteuid() != 0 {
-		fmt.Println("Error: This service must run as root.")
-		os.Exit(1)
+		// Exit immediately if not running as root
+		if os.Geteuid() != 0 {
+			fmt.Println("Error: This service must run as root.")
+			os.Exit(1)
+		}
 	}
 
 	if *help {
@@ -53,31 +57,36 @@ func main() {
 		return
 	}
 
-	logger.Info("Starting host manager", "port", *port, "audit", *auditLog)
+	logger.Info("Starting host manager", "port", *port, "audit", *auditLog, "skip_bootstrap", *skipBootstrap)
 
 	// Initialize state manager
 	stateManager := state.NewManager()
 
-	// Check if host is already initialized
-	hostState, err := stateManager.Load()
-	if err != nil {
-		logger.Warn("Failed to load state, assuming fresh host", "error", err)
-		hostState = &state.HostState{Initialized: false}
-	}
-
-	if !hostState.Initialized {
-		logger.Info("Fresh host detected, running initialization")
-
-		// Initialize host with auto-detection
-		hostManager := host.NewManager(stateManager)
-		if err := hostManager.Initialize(); err != nil {
-			logger.Error("Host setup failed", "error", err)
-			os.Exit(1)
+	// Only run bootstrap if not skipped
+	if !*skipBootstrap {
+		// Check if host is already initialized
+		hostState, err := stateManager.Load()
+		if err != nil {
+			logger.Warn("Failed to load state, assuming fresh host", "error", err)
+			hostState = &state.HostState{Initialized: false}
 		}
 
-		logger.Info("Host initialization complete")
+		if !hostState.Initialized {
+			logger.Info("Fresh host detected, running initialization")
+
+			// Initialize host with auto-detection
+			hostManager := host.NewManager(stateManager)
+			if err := hostManager.Initialize(); err != nil {
+				logger.Error("Host setup failed", "error", err)
+				os.Exit(1)
+			}
+
+			logger.Info("Host initialization complete")
+		} else {
+			logger.Info("Host already initialized, skipping setup", "initialized_at", hostState.InitializedAt)
+		}
 	} else {
-		logger.Info("Host already initialized, skipping setup", "initialized_at", hostState.InitializedAt)
+		logger.Info("Bootstrap skipped, starting server only")
 	}
 
 	// Start HTTP server for runtime operations
@@ -95,10 +104,11 @@ func showHelp() {
 Usage: %s [options]
 
 Options:
-  --help          Show this help message
-  --port PORT     HTTP server port (default: 8080)
-  --foreground    Run in foreground instead of background
-  --audit         Enable HTTP request audit logging
+  --help             Show this help message
+  --port PORT        HTTP server port (default: 8080)
+  --foreground       Run in foreground instead of background
+  --audit            Enable HTTP request audit logging
+  --skip-bootstrap   Skip host initialization and run server only (for containers)
 
 Features:
   - Auto-initialization: Complete host setup on first run
@@ -120,11 +130,14 @@ Example Usage:
   # Start on custom port
   %s --port 9090
 
+  # Run in container/devcontainer (skip bootstrap, kind cluster management only)
+  %s --skip-bootstrap --foreground
+
   # Create development cluster
   curl -X POST http://localhost:8080/clusters -d '{"name": "my-dev-cluster"}'
 
 For more information, see README.md
-`, os.Args[0], os.Args[0], os.Args[0])
+`, os.Args[0], os.Args[0], os.Args[0], os.Args[0])
 }
 
 // daemonize implements proper POSIX daemonization
